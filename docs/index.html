@@ -24,9 +24,11 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
     <span id="runDate" class="ms-3"></span>
   </p>
 
-  <div class="d-flex gap-2 mb-3">
+  <div class="d-flex gap-2 align-items-center mb-3 flex-wrap">
     <input id="search" class="form-control form-control-sm" style="max-width:280px"
            placeholder="搜索品种/交易所/月份...">
+    <button id="updateBtn" class="btn btn-primary btn-sm">更新数据</button>
+    <span id="updateStatus" class="small text-muted"></span>
   </div>
 
   <div class="table-wrap">
@@ -114,20 +116,115 @@ function render(){
   renderBody();
 }
 
-fetch('results.json')
-  .then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-  .then(j => {
-    COLS = j.columns || [];
-    DATA = j.data || [];
-    document.getElementById('genAt').textContent = j.generated_at || '-';
-    document.getElementById('runDate').textContent = j.run_date ? ('数据日期: '+j.runDate) : '';
-    render();
-  })
-  .catch(e => {
-    document.getElementById('genAt').textContent = '加载失败: ' + e.message;
-  });
+function loadData(){
+  // 加 cache-buster 绕过 CDN 缓存, 保证拿到最新结果
+  return fetch('results.json?cb=' + Date.now())
+    .then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(j => {
+      COLS = j.columns || [];
+      DATA = j.data || [];
+      document.getElementById('genAt').textContent = j.generated_at || '-';
+      document.getElementById('runDate').textContent = j.run_date ? ('数据日期: '+j.run_date) : '';
+      render();
+    });
+}
+
+loadData().catch(e => {
+  document.getElementById('genAt').textContent = '加载失败: ' + e.message;
+});
 
 document.getElementById('search').addEventListener('input', renderBody);
+
+// ===== 更新数据按钮: 触发 GitHub Actions workflow 并轮询直到完成 =====
+const REPO = 'ylw0329/option-premium';
+const WF_FILE = 'run.yml';
+const API = 'https://api.github.com/repos/' + REPO;
+const btn = document.getElementById('updateBtn');
+const statusEl = document.getElementById('updateStatus');
+
+function getToken(){ return localStorage.getItem('gh_pat') || ''; }
+
+function askToken(){
+  const t = prompt(
+    '首次使用需要 GitHub Token 用于触发更新(仅存于你自己的浏览器)。\n\n' +
+    '创建方法: GitHub → Settings → Developer settings →\n' +
+    'Fine-grained tokens → Generate new token →\n' +
+    '仅选择仓库 option-premium, 权限勾选 Actions: Read and write。');
+  if(t && t.trim()){
+    localStorage.setItem('gh_pat', t.trim());
+    return t.trim();
+  }
+  return '';
+}
+
+function setStatus(msg, cls){
+  statusEl.textContent = msg;
+  statusEl.className = 'small ' + (cls || 'text-muted');
+}
+
+btn.addEventListener('click', async () => {
+  let token = getToken();
+  if(!token){
+    token = askToken();
+    if(!token) return;
+  }
+  btn.disabled = true;
+  setStatus('触发运行中...', 'text-muted');
+  try{
+    const resp = await fetch(`${API}/actions/workflows/${WF_FILE}/dispatches`, {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'},
+      body: JSON.stringify({ref: 'main'})
+    });
+    if(resp.status === 401){
+      localStorage.removeItem('gh_pat');
+      throw new Error('Token 无效, 已清除, 请重新点击按钮粘贴新 Token');
+    }
+    if(resp.status === 403){
+      throw new Error('Token 无 Actions 写权限, 请检查 Token 权限设置');
+    }
+    if(resp.status !== 204){
+      throw new Error('触发失败: HTTP ' + resp.status);
+    }
+    setStatus('已触发, 等待 GitHub 服务器运行 (约 5-7 分钟)...', 'text-primary');
+    pollRun(token, Date.now());
+  }catch(e){
+    setStatus(e.message, 'text-danger');
+    btn.disabled = false;
+  }
+});
+
+async function pollRun(token, startedAt){
+  const MAX_MS = 15 * 60 * 1000;
+  try{
+    const resp = await fetch(`${API}/actions/runs?per_page=1`, {
+      headers: {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'}
+    });
+    if(!resp.ok) throw new Error('查询状态失败: HTTP ' + resp.status);
+    const j = await resp.json();
+    const run = (j.workflow_runs || [])[0];
+    if(!run) throw new Error('未找到运行记录');
+    const mins = Math.round((Date.now() - startedAt) / 6000) / 10;
+    if(run.status !== 'completed'){
+      if(Date.now() - startedAt > MAX_MS){
+        throw new Error('超时(>15分钟), 请稍后手动刷新页面查看');
+      }
+      setStatus(`运行中: ${run.status} (已等 ${mins} 分钟)...`, 'text-primary');
+      setTimeout(() => pollRun(token, startedAt), 15000);
+      return;
+    }
+    if(run.conclusion === 'success'){
+      setStatus('更新完成, 刷新数据...', 'text-success');
+      await loadData();
+      setStatus('数据已更新 ✓', 'text-success');
+    }else{
+      setStatus('运行失败: ' + run.conclusion + ' (详情见 GitHub Actions 页)', 'text-danger');
+    }
+  }catch(e){
+    setStatus(e.message, 'text-danger');
+  }
+  btn.disabled = false;
+}
 </script>
 </body>
 </html>
