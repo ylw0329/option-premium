@@ -29,8 +29,9 @@ def main():
     df = pd.read_csv(csv_path, encoding="utf-8-sig")
     # 列名顺序即表格列顺序
     columns = df.columns.tolist()
-    # NaN -> null, 其余保持
-    data = df.where(pd.notna(df), None).to_dict(orient="records")
+    # NaN -> null: 先转 object 再替换, 否则 float 列的 None 会被 pandas 转回 NaN,
+    # json.dump 会输出非法 JSON 字面量 NaN, 导致浏览器 JSON.parse 失败
+    data = df.astype(object).where(pd.notna(df), None).to_dict(orient="records")
 
     # 从文件名提取日期(如 option_premium_result_20260831.csv -> 2026-08-31)
     fname = os.path.basename(csv_path)
@@ -50,7 +51,7 @@ def main():
     os.makedirs("docs", exist_ok=True)
     out_path = os.path.join("docs", "results.json")
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+        json.dump(result, f, ensure_ascii=False, indent=2, allow_nan=False)
     print(f"已生成 {out_path} ({len(data)} 行数据)")
 
 
