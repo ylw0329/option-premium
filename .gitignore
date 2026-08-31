@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+
+# 本地认证(含密码, 不上传)
+auth_config.py
+
+# TqSdk 源码克隆(不需要推, Actions 用 pip 装)
+tqsdk/
+
+# 文档资料/压缩包
+tqsdk-trading-and-data*
+*.zip
+
+# 其他与本程序无关的本地文件
+get_copper_price.py
+config.ini
+option_data.json
+parse_option_data.py
+t_quote.html
+
+# 结果文件(由 Actions 重新生成, 本地不需要推)
+option_premium_result_*.csv
+
+# IDE / 临时
+.trae-cn/
+.vscode/
+.idea/
+*.tmp
+_diag_*.py

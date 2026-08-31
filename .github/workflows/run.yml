@@ -1,0 +1,44 @@
+name: 期权权利金计算
+
+# 手动触发(workflow_dispatch): 在 GitHub 仓库 Actions 页面点 "Run workflow"
+on:
+  workflow_dispatch:
+
+# 让 workflow 有权限提交结果到仓库(用于 GitHub Pages 展示)
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  calc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          pip install tqsdk==3.10.1 pandas
+
+      - name: 运行计算程序
+        run: python main.py
+        env:
+          TQ_USER: ${{ secrets.TQ_USER }}
+          TQ_PASSWORD: ${{ secrets.TQ_PASSWORD }}
+
+      - name: 生成网页数据
+        run: python generate_web_data.py
+
+      - name: 提交结果到仓库
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/results.json option_premium_result_*.csv || true
+          git commit -m "更新期权权利金计算结果 $(date -u +%Y-%m-%d)" || echo "无变更"
+          git push
