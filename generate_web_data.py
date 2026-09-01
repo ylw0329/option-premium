@@ -8,6 +8,7 @@ import glob
 import json
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -42,7 +43,7 @@ def main():
             run_date = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
 
     result = {
-        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": datetime.now(tz=ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
         "run_date": run_date,
         "columns": columns,
         "data": data,
