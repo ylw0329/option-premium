@@ -78,7 +78,7 @@ def build_products(api, config: dict) -> dict:
 def output_results(rows: list, run_date: str, columns: list):
     df = pd.DataFrame(rows, columns=columns)
     # 数值列保留两位小数
-    for col in ("四张合约合计", "合计÷2", "最终结果"):
+    for col in ("四张合约合计", "最终结果"):
         df[col] = df[col].apply(lambda v: round(v, 2) if isinstance(v, (int, float)) else v)
     # 控制台输出
     with pd.option_context("display.max_rows", None, "display.max_columns", None,

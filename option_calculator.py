@@ -38,7 +38,7 @@ def build_columns(call_levels: int, put_levels: int) -> list:
         cols += [f"C虚{i}合约", f"C虚{i}价格", f"C虚{i}IV"]
     for i in range(1, put_levels + 1):
         cols += [f"P虚{i}合约", f"P虚{i}价格", f"P虚{i}IV"]
-    cols += ["到期天数", "四张合约合计", "合计÷2", "最终结果", "平均IV", "状态"]
+    cols += ["到期天数", "四张合约合计", "最终结果", "平均IV", "状态"]
     return cols
 
 
@@ -315,10 +315,8 @@ def calc_product(api, columns, call_levels: int, put_levels: int,
         prices = c_prices + p_prices
         if all(p is not None for p in prices) and days and days > 0:
             total = sum(prices)
-            half = total / 2.0
-            final = half / days
+            final = (total / 2.0) / days
             row["四张合约合计"] = total
-            row["合计÷2"] = half
             row["最终结果"] = final
             row["状态"] = "OK" if not missing else "、".join(missing)
         else:
