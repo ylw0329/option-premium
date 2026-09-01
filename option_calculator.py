@@ -38,7 +38,7 @@ def build_columns(call_levels: int, put_levels: int) -> list:
         cols += [f"C虚{i}合约", f"C虚{i}价格", f"C虚{i}IV"]
     for i in range(1, put_levels + 1):
         cols += [f"P虚{i}合约", f"P虚{i}价格", f"P虚{i}IV"]
-    cols += ["到期天数", "四张合约合计", "合计÷2", "最终结果", "状态"]
+    cols += ["到期天数", "四张合约合计", "合计÷2", "最终结果", "平均IV", "状态"]
     return cols
 
 
@@ -301,6 +301,16 @@ def calc_product(api, columns, call_levels: int, put_levels: int,
                     iv = calc_implied_volatility(p_prices[i - 1], underlying_price,
                                                   strike, T, risk_free_rate, "PUT")
                     row[f"P虚{i}IV"] = round(iv, 4) if iv is not None else None
+
+        # 计算平均隐含波动率: 所有 C 虚*IV 和 P 虚*IV 的算术平均(过滤 None)
+        ivs = []
+        for i in range(1, call_levels + 1):
+            v = row.get(f"C虚{i}IV")
+            if v is not None: ivs.append(v)
+        for i in range(1, put_levels + 1):
+            v = row.get(f"P虚{i}IV")
+            if v is not None: ivs.append(v)
+        row["平均IV"] = round(sum(ivs) / len(ivs), 4) if ivs else None
 
         prices = c_prices + p_prices
         if all(p is not None for p in prices) and days and days > 0:
