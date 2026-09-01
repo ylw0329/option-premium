@@ -144,6 +144,15 @@ const statusEl = document.getElementById('updateStatus');
 
 function getToken(){ return localStorage.getItem('gh_pat') || ''; }
 
+// URL hash 自动注入 token (#token=xxx), 注入后清除 hash, 不留在地址栏
+(function(){
+  const m = location.hash.match(/[#&]token=([^&]+)/);
+  if(m && m[1]){
+    localStorage.setItem('gh_pat', decodeURIComponent(m[1]));
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+})();
+
 function askToken(){
   const t = prompt(
     '首次使用需要 GitHub Token 用于触发更新(仅存于你自己的浏览器)。\n\n' +
