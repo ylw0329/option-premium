@@ -12,6 +12,7 @@
 import datetime
 import json
 import os
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -105,7 +106,7 @@ def output_results(rows: list, run_date: str, columns: list):
 
 
 def main():
-    run_date = datetime.date.today().strftime("%Y%m%d")
+    run_date = datetime.datetime.now(tz=ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
     print(f"运行日期: {run_date}")
     config = load_config()
 
