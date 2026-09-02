@@ -35,8 +35,13 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
     <button id="updateBtn" class="btn btn-primary btn-sm">更新数据</button>
     <button id="exportTpl" class="btn btn-outline-secondary btn-sm" title="导出当前全部品种代码为排序模板 txt">导出模板</button>
     <button id="importTpl" class="btn btn-outline-secondary btn-sm" title="导入排序模板 txt, 按模板顺序排列品种">导入模板</button>
-    <button id="exportXlsx" class="btn btn-success btn-sm" title="按参考模板格式导出日金表 xlsx(品种按排序模板顺序)">导出Excel</button>
-    <button id="clearTpl" class="btn btn-outline-secondary btn-sm" style="display:none">清除模板</button>
+    <button id="exportXlsx" class="btn btn-success btn-sm" title="按参考模板格式导出日金表 xlsx(品种按当前排序)">导出Excel</button>
+    <label class="small text-muted ms-2 mb-0">排序:</label>
+    <select id="sortMode" class="form-select form-select-sm" style="width:auto">
+      <option value="builtin">默认顺序</option>
+      <option value="custom">我的导入模板</option>
+      <option value="none">原始顺序</option>
+    </select>
     <input type="file" id="tplFile" accept=".txt,text/plain" style="display:none">
     <span id="updateStatus" class="small text-muted"></span>
     <span id="tplStatus" class="small text-muted ms-2"></span>
@@ -148,19 +153,40 @@ loadData().catch(e => {
 
 document.getElementById('search').addEventListener('input', renderBody);
 
-// ===== 排序模板: 导入/导出 txt, 模板顺序仅存于本机浏览器 localStorage =====
-// 数据仍按默认顺序获取, 加载后在前端按模板重排, 不影响数据本身
+// ===== 排序模板: 内置默认顺序 / 导入自定义 txt / 原始顺序 =====
+// 数据仍按默认顺序获取, 加载后在前端按所选顺序重排, 不影响数据本身
+// 内置默认顺序(自选清单), 打开网页即生效, 无需每次导入
+const DEFAULT_TEMPLATE = ['SC','AG','AU','CU','SN','NI','BR','JM','P','PS','LC','MO','IO','HO',
+  'A','AD','AL','AO','AP','B','BC','BU','BZ','C','CF','CJ','CS','EB','EG','FG','FU','I','JD',
+  'L','LG','LH','M','MA','NR','OI','OP','PB','PD','PF','PG','PK','PL','PP','PR','PT','PX',
+  'RB','RM','RU','SA','SF','SH','SI','SM','SP','SR','TA','UR','V','Y','ZC','ZN','J'];
 function rowCode(r){ return String(r['品种']||'').split(/[：:]/)[0].trim().toUpperCase(); }
 function getTpl(){ try{ return JSON.parse(localStorage.getItem('sort_template')||'[]'); }catch(e){ return []; } }
+function getMode(){ return localStorage.getItem('sort_mode') || 'builtin'; }  // builtin | custom | none
+// 当前生效的排序列表
+function getActiveTpl(){
+  const m = getMode();
+  if(m === 'none') return [];
+  if(m === 'custom'){ const t = getTpl(); return t.length ? t : DEFAULT_TEMPLATE; }
+  return DEFAULT_TEMPLATE;
+}
 function setTplStatus(){
-  const n = getTpl().length;
+  const m = getMode();
   const el = document.getElementById('tplStatus');
-  document.getElementById('clearTpl').style.display = n ? '' : 'none';
-  el.textContent = n ? ('已按模板排序 (' + n + ' 个品种), 其余品种排在最后') : '';
-  el.className = 'small ms-2 ' + (n ? 'text-success' : 'text-muted');
+  let txt;
+  if(m === 'custom'){
+    const n = getTpl().length;
+    txt = n ? ('我的导入模板 (' + n + ' 个品种), 其余排最后') : '导入模板为空, 已用默认顺序';
+  }else if(m === 'none'){
+    txt = '原始顺序';
+  }else{
+    txt = '默认顺序 (' + DEFAULT_TEMPLATE.length + ' 个品种), 其余排最后';
+  }
+  el.textContent = txt;
+  el.className = 'small ms-2 ' + (m === 'none' ? 'text-muted' : 'text-success');
 }
 function applyTemplate(){
-  const tpl = getTpl();
+  const tpl = getActiveTpl();
   if(!tpl.length){ setTplStatus(); return; }
   const idx = {}; tpl.forEach((c,i) => idx[c.toUpperCase()] = i);
   DATA.forEach((r,i) => r.__pos = i);
@@ -212,19 +238,26 @@ document.getElementById('tplFile').addEventListener('change', e => {
     const tpl = parseTpl(reader.result);
     if(!tpl.length){ alert('模板中未识别到品种代码, 请先点"导出模板"查看格式'); return; }
     localStorage.setItem('sort_template', JSON.stringify(tpl));
+    localStorage.setItem('sort_mode', 'custom');   // 导入后自动切到"我的导入模板"
+    document.getElementById('sortMode').value = 'custom';
     sortCol = null;   // 取消列排序, 展示模板顺序
     applyTemplate();
     render();
   };
   reader.readAsText(f, 'utf-8');
 });
-document.getElementById('clearTpl').addEventListener('click', () => {
-  localStorage.removeItem('sort_template');
-  location.reload();
+// 排序方式下拉切换
+document.getElementById('sortMode').addEventListener('change', e => {
+  localStorage.setItem('sort_mode', e.target.value);
+  sortCol = null;
+  applyTemplate();
+  render();
 });
+// 初始化下拉框为当前模式
+document.getElementById('sortMode').value = getMode();
 
 // ===== 导出 Excel: 按参考模板(日金表)格式, 每个品种占 天/C+P前T/日金/隐波 四列 =====
-// 品种及顺序: 优先用排序模板(自选清单); 未导入模板则导出全部品种
+// 品种及顺序: 跟随当前排序方式(默认顺序/我的导入模板); 原始顺序时导出全部品种
 function numOrBlank(v){
   const n = Number(v);
   return (v === null || v === undefined || v === '' || isNaN(n)) ? '' : n;
@@ -234,8 +267,8 @@ document.getElementById('exportXlsx').addEventListener('click', () => {
   if(!DATA.length){ alert('暂无数据可导出'); return; }
   const byCode = {};
   DATA.forEach(r => { const c = rowCode(r); if(c) byCode[c] = r; });
-  let codes = getTpl();                       // 自选清单(排序模板)
-  if(!codes.length) codes = DATA.map(rowCode).filter(Boolean);  // 无模板 -> 全部
+  let codes = getActiveTpl();                    // 当前生效排序(默认顺序/导入模板)
+  if(!codes.length) codes = DATA.map(rowCode).filter(Boolean);  // 原始顺序 -> 全部品种
   // 品种中文名(参考模板第1行表头用中文名)
   const nameOf = code => {
     const r = byCode[code];
