@@ -32,7 +32,12 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
     <input id="search" class="form-control form-control-sm" style="max-width:280px"
            placeholder="搜索品种/交易所/月份...">
     <button id="updateBtn" class="btn btn-primary btn-sm">更新数据</button>
+    <button id="exportTpl" class="btn btn-outline-secondary btn-sm" title="导出当前全部品种代码为排序模板 txt">导出模板</button>
+    <button id="importTpl" class="btn btn-outline-secondary btn-sm" title="导入排序模板 txt, 按模板顺序排列品种">导入模板</button>
+    <button id="clearTpl" class="btn btn-outline-secondary btn-sm" style="display:none">清除模板</button>
+    <input type="file" id="tplFile" accept=".txt,text/plain" style="display:none">
     <span id="updateStatus" class="small text-muted"></span>
+    <span id="tplStatus" class="small text-muted ms-2"></span>
   </div>
 
   <div class="table-wrap">
@@ -61,7 +66,7 @@ function fmt(v, col){
   if(v === null || v === undefined || v === '') return '-';
   if(isNumCol(col)){
     const n = Number(v);
-    if(!isNaN(n)) return n.toFixed(col.includes('IV') ? 4 : 2);
+    if(!isNaN(n)) return n.toFixed(2);
   }
   return String(v);
 }
@@ -129,6 +134,7 @@ function loadData(){
       DATA = j.data || [];
       document.getElementById('genAt').textContent = j.generated_at || '-';
       document.getElementById('runDate').textContent = j.run_date ? ('数据日期: '+j.run_date) : '';
+      applyTemplate();
       render();
     });
 }
@@ -138,6 +144,81 @@ loadData().catch(e => {
 });
 
 document.getElementById('search').addEventListener('input', renderBody);
+
+// ===== 排序模板: 导入/导出 txt, 模板顺序仅存于本机浏览器 localStorage =====
+// 数据仍按默认顺序获取, 加载后在前端按模板重排, 不影响数据本身
+function rowCode(r){ return String(r['品种']||'').split(/[：:]/)[0].trim().toUpperCase(); }
+function getTpl(){ try{ return JSON.parse(localStorage.getItem('sort_template')||'[]'); }catch(e){ return []; } }
+function setTplStatus(){
+  const n = getTpl().length;
+  const el = document.getElementById('tplStatus');
+  document.getElementById('clearTpl').style.display = n ? '' : 'none';
+  el.textContent = n ? ('已按模板排序 (' + n + ' 个品种), 其余品种排在最后') : '';
+  el.className = 'small ms-2 ' + (n ? 'text-success' : 'text-muted');
+}
+function applyTemplate(){
+  const tpl = getTpl();
+  if(!tpl.length){ setTplStatus(); return; }
+  const idx = {}; tpl.forEach((c,i) => idx[c.toUpperCase()] = i);
+  DATA.forEach((r,i) => r.__pos = i);
+  DATA.sort((a,b) => {
+    const ia = idx[rowCode(a)], ib = idx[rowCode(b)];
+    const ka = ia === undefined ? 1 : 0, kb = ib === undefined ? 1 : 0;
+    if(ka !== kb) return ka - kb;        // 模板内品种在前
+    if(ka === 0) return ia - ib;         // 模板内按模板顺序
+    return a.__pos - b.__pos;            // 模板外保持默认顺序
+  });
+  DATA.forEach(r => delete r.__pos);
+  setTplStatus();
+}
+// 解析模板 txt: # 开头为注释; 代码可每行一个, 也可用空格/逗号/顿号/分号分隔; 可有引号
+function parseTpl(text){
+  const codes = [];
+  String(text||'').split(/\r?\n/).forEach(line => {
+    line = line.trim();
+    if(!line || line.startsWith('#')) return;
+    line.split(/[\s,;，、]+/).forEach(tok => {
+      const c = tok.replace(/["'“”‘’]/g, '').trim().toUpperCase();
+      if(/^[A-Z]{1,4}$/.test(c) && !codes.includes(c)) codes.push(c);
+    });
+  });
+  return codes;
+}
+document.getElementById('exportTpl').addEventListener('click', () => {
+  const codes = [...new Set(DATA.map(rowCode).filter(Boolean))];
+  const lines = [
+    '# 期权品种排序模板',
+    '# 每行一个品种代码(如 AG), 表格将按本文件中的顺序排列; 不在模板中的品种排在最后',
+    '# 以 # 开头的行为注释, 可删除; 代码不区分大小写; 也可用空格/逗号/顿号分隔',
+    ''
+  ].concat(codes);
+  const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/plain;charset=utf-8'});  // ﻿ 为 UTF-8 BOM, 保证记事本中文不乱码
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = '期权排序模板.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+});
+document.getElementById('importTpl').addEventListener('click', () => document.getElementById('tplFile').click());
+document.getElementById('tplFile').addEventListener('change', e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const tpl = parseTpl(reader.result);
+    if(!tpl.length){ alert('模板中未识别到品种代码, 请先点"导出模板"查看格式'); return; }
+    localStorage.setItem('sort_template', JSON.stringify(tpl));
+    sortCol = null;   // 取消列排序, 展示模板顺序
+    applyTemplate();
+    render();
+  };
+  reader.readAsText(f, 'utf-8');
+});
+document.getElementById('clearTpl').addEventListener('click', () => {
+  localStorage.removeItem('sort_template');
+  location.reload();
+});
 
 // ===== 更新数据按钮: 触发 GitHub Actions workflow 并轮询直到完成 =====
 const REPO = 'ylw0329/option-premium';

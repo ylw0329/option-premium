@@ -293,16 +293,16 @@ def calc_product(api, columns, call_levels: int, put_levels: int,
                     strike = q.strike_price if q and _valid_price(q.strike_price) else None
                     iv = calc_implied_volatility(c_prices[i - 1], underlying_price,
                                                   strike, T, risk_free_rate, "CALL")
-                    row[f"C虚{i}IV"] = round(iv, 4) if iv is not None else None
+                    row[f"C虚{i}IV"] = round(iv * 100, 2) if iv is not None else None
             for i, sid in enumerate(p_ids, 1):
                 if sid and p_prices[i - 1] is not None:
                     q = quotes.get(sid)
                     strike = q.strike_price if q and _valid_price(q.strike_price) else None
                     iv = calc_implied_volatility(p_prices[i - 1], underlying_price,
                                                   strike, T, risk_free_rate, "PUT")
-                    row[f"P虚{i}IV"] = round(iv, 4) if iv is not None else None
+                    row[f"P虚{i}IV"] = round(iv * 100, 2) if iv is not None else None
 
-        # 计算平均隐含波动率: 所有 C 虚*IV 和 P 虚*IV 的算术平均(过滤 None)
+        # 计算平均隐含波动率(单位与 C/P IV 一致, 已 ×100): 所有有效 IV 的算术平均
         ivs = []
         for i in range(1, call_levels + 1):
             v = row.get(f"C虚{i}IV")
@@ -310,7 +310,7 @@ def calc_product(api, columns, call_levels: int, put_levels: int,
         for i in range(1, put_levels + 1):
             v = row.get(f"P虚{i}IV")
             if v is not None: ivs.append(v)
-        row["平均IV"] = round(sum(ivs) / len(ivs), 4) if ivs else None
+        row["平均IV"] = round(sum(ivs) / len(ivs), 2) if ivs else None
 
         prices = c_prices + p_prices
         if all(p is not None for p in prices) and days and days > 0:
