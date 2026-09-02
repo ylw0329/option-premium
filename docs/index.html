@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>期权虚值权利金指标</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 body { background: #f5f5f5; }
 .table-wrap { overflow: auto; max-height: 70vh; background: #fff; border-radius: 8px; }
@@ -34,6 +35,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
     <button id="updateBtn" class="btn btn-primary btn-sm">更新数据</button>
     <button id="exportTpl" class="btn btn-outline-secondary btn-sm" title="导出当前全部品种代码为排序模板 txt">导出模板</button>
     <button id="importTpl" class="btn btn-outline-secondary btn-sm" title="导入排序模板 txt, 按模板顺序排列品种">导入模板</button>
+    <button id="exportXlsx" class="btn btn-success btn-sm" title="按参考模板格式导出日金表 xlsx(品种按排序模板顺序)">导出Excel</button>
     <button id="clearTpl" class="btn btn-outline-secondary btn-sm" style="display:none">清除模板</button>
     <input type="file" id="tplFile" accept=".txt,text/plain" style="display:none">
     <span id="updateStatus" class="small text-muted"></span>
@@ -57,7 +59,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 <script>
 const NUM_COLS = ['标的价格','C虚1价格','C虚2价格','P虚1价格','P虚2价格',
   'C虚1IV','C虚2IV','P虚1IV','P虚2IV','到期天数','四张合约合计','最终结果','平均IV'];
-let DATA = [], COLS = [], sortCol = null, sortAsc = true;
+let DATA = [], COLS = [], sortCol = null, sortAsc = true, RUN_DATE = '';
 
 // 数值列动态识别: 含"价格/IV/天数/合计/÷/结果"的列
 function isNumCol(c){ return NUM_COLS.includes(c); }
@@ -132,6 +134,7 @@ function loadData(){
     .then(j => {
       COLS = j.columns || [];
       DATA = j.data || [];
+      RUN_DATE = j.run_date || '';
       document.getElementById('genAt').textContent = j.generated_at || '-';
       document.getElementById('runDate').textContent = j.run_date ? ('数据日期: '+j.run_date) : '';
       applyTemplate();
@@ -218,6 +221,56 @@ document.getElementById('tplFile').addEventListener('change', e => {
 document.getElementById('clearTpl').addEventListener('click', () => {
   localStorage.removeItem('sort_template');
   location.reload();
+});
+
+// ===== 导出 Excel: 按参考模板(日金表)格式, 每个品种占 天/C+P前T/日金/隐波 四列 =====
+// 品种及顺序: 优先用排序模板(自选清单); 未导入模板则导出全部品种
+function numOrBlank(v){
+  const n = Number(v);
+  return (v === null || v === undefined || v === '' || isNaN(n)) ? '' : n;
+}
+document.getElementById('exportXlsx').addEventListener('click', () => {
+  if(typeof XLSX === 'undefined'){ alert('Excel 组件未加载(可能 CDN 被拦截), 请检查网络后刷新重试'); return; }
+  if(!DATA.length){ alert('暂无数据可导出'); return; }
+  const byCode = {};
+  DATA.forEach(r => { const c = rowCode(r); if(c) byCode[c] = r; });
+  let codes = getTpl();                       // 自选清单(排序模板)
+  if(!codes.length) codes = DATA.map(rowCode).filter(Boolean);  // 无模板 -> 全部
+  // 品种中文名(参考模板第1行表头用中文名)
+  const nameOf = code => {
+    const r = byCode[code];
+    if(!r) return code;
+    const p = String(r['品种']||'').split(/[：:]/);
+    return (p[1] && p[1].trim()) || code;
+  };
+  // 日期: run_date(2026-09-03) -> 模板样式 M.D(9.3)
+  let dateCell = RUN_DATE || '';
+  const dm = String(RUN_DATE).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(dm) dateCell = Number(dm[2]) + '.' + Number(dm[3]);
+
+  const row1 = ['日金'], row2 = ['日期'], row3 = [dateCell];
+  const merges = [];
+  codes.forEach((code, i) => {
+    const c0 = 1 + i * 4;                      // 0 基列号, A=0
+    merges.push({ s: { r: 0, c: c0 }, e: { r: 0, c: c0 + 3 } });  // 第1行品种名合并4列
+    row1.push(nameOf(code), '', '', '');
+    row2.push('天', 'C+P前T', '日金', '隐波');
+    const r = byCode[code];
+    if(r){
+      row3.push(numOrBlank(r['到期天数']), numOrBlank(r['四张合约合计']),
+               numOrBlank(r['最终结果']), numOrBlank(r['平均IV']));
+    }else{
+      row3.push('', '', '', '');
+    }
+  });
+  const ws = XLSX.utils.aoa_to_sheet([row1, row2, row3]);
+  ws['!merges'] = merges;
+  ws['!cols'] = [{ wch: 10 }].concat(
+    codes.flatMap(() => [{ wch: 6 }, { wch: 12 }, { wch: 9 }, { wch: 8 }])
+  );
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '日金');
+  XLSX.writeFile(wb, '期权日金_' + (RUN_DATE || ('run' + Date.now())) + '.xlsx');
 });
 
 // ===== 更新数据按钮: 触发 GitHub Actions workflow 并轮询直到完成 =====
