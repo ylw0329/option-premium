@@ -306,12 +306,15 @@ document.getElementById('exportXlsx').addEventListener('click', () => {
   XLSX.writeFile(wb, '期权日金_' + (RUN_DATE || ('run' + Date.now())) + '.xlsx');
 });
 
-// ===== 更新数据按钮: 触发 GitHub Actions workflow 并轮询直到完成 =====
+// ===== 更新数据: 触发 GitHub Actions; 运行状态由仓库内 update_status.json 同步给所有访问者 =====
 const REPO = 'ylw0329/option-premium';
 const WF_FILE = 'run.yml';
 const API = 'https://api.github.com/repos/' + REPO;
 const btn = document.getElementById('updateBtn');
 const statusEl = document.getElementById('updateStatus');
+const STALE_MS = 30 * 60 * 1000;   // running 超过 30 分钟视为僵尸(CI 异常中断), 恢复按钮
+let isRunning = false;             // 当前是否处于更新中(对所有人生效)
+let sawRunning = false;            // 本轮轮询是否见过 running(用于 running->idle 时自动刷新)
 
 function getToken(){ return localStorage.getItem('gh_pat') || ''; }
 
@@ -332,14 +335,54 @@ function setStatus(msg, cls){
   statusEl.textContent = msg;
   statusEl.className = 'small ' + (cls || 'text-muted');
 }
+function setBtnRunning(on){
+  isRunning = on;
+  btn.disabled = on;
+  btn.textContent = on ? '更新中...' : '更新数据';
+}
+
+// 查询仓库内状态文件(走 Pages CDN, 无 API 速率限制; cache-buster 保证拿到最新)
+async function checkUpdateStatus(){
+  try{
+    const resp = await fetch('update_status.json?cb=' + Date.now());
+    if(!resp.ok){ applyIdle(); return; }       // 文件不存在(首次) = 空闲
+    const st = await resp.json();
+    if(st.status === 'running' && st.started_at){
+      const mins = (Date.now() - new Date(st.started_at).getTime()) / 60000;
+      if(mins > STALE_MS / 60000){ applyIdle(); return; }   // 僵尸状态
+      sawRunning = true;
+      setBtnRunning(true);
+      setStatus(`数据更新中(服务器已运行 ${Math.max(1, Math.round(mins))} 分钟), 完成后自动刷新, 请勿重复点击`, 'text-primary');
+    }else{
+      applyIdle(st.conclusion);
+    }
+  }catch(e){ /* 网络抖动保持现状, 下轮重试 */ }
+}
+
+function applyIdle(conclusion){
+  const wasRunning = isRunning || sawRunning;
+  sawRunning = false;
+  setBtnRunning(false);
+  if(wasRunning){
+    // 刚从更新中变为空闲 → 自动拉取最新数据
+    if(conclusion === 'failure' || conclusion === 'cancelled'){
+      setStatus('本次更新失败, 可重试或查看 GitHub Actions 日志', 'text-danger');
+    }else{
+      setStatus('更新完成, 刷新数据...', 'text-success');
+      loadData().then(() => setStatus('数据已更新 ✓', 'text-success'))
+                .catch(() => setStatus('数据已更新, 请刷新页面', 'text-success'));
+    }
+  }
+}
 
 btn.addEventListener('click', async () => {
+  if(isRunning) return;                        // 更新中: 按钮已禁用, 双保险
   let token = getToken();
   if(!token){
     token = askToken();
     if(!token) return;
   }
-  btn.disabled = true;
+  setBtnRunning(true);
   setStatus('触发运行中...', 'text-muted');
   try{
     const resp = await fetch(`${API}/actions/workflows/${WF_FILE}/dispatches`, {
@@ -357,45 +400,31 @@ btn.addEventListener('click', async () => {
     if(resp.status !== 204){
       throw new Error('触发失败: HTTP ' + resp.status);
     }
-    setStatus('已触发, 等待 GitHub 服务器运行 (约 5-7 分钟)...', 'text-primary');
-    pollRun(token, Date.now());
+    // 本地乐观锁定: 记录触发时间, 刷新页面后短时间内仍保持按钮禁用(等状态文件变为 running)
+    localStorage.setItem('update_triggered_at', String(Date.now()));
+    sawRunning = true;
+    setStatus('已触发, 等待 GitHub 服务器开始运行(约 1-2 分钟后状态同步)...', 'text-primary');
   }catch(e){
     setStatus(e.message, 'text-danger');
-    btn.disabled = false;
+    setBtnRunning(false);
   }
 });
 
-async function pollRun(token, startedAt){
-  const MAX_MS = 15 * 60 * 1000;
-  try{
-    const resp = await fetch(`${API}/actions/runs?per_page=1`, {
-      headers: {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'}
-    });
-    if(!resp.ok) throw new Error('查询状态失败: HTTP ' + resp.status);
-    const j = await resp.json();
-    const run = (j.workflow_runs || [])[0];
-    if(!run) throw new Error('未找到运行记录');
-    const mins = Math.round((Date.now() - startedAt) / 6000) / 10;
-    if(run.status !== 'completed'){
-      if(Date.now() - startedAt > MAX_MS){
-        throw new Error('超时(>15分钟), 请稍后手动刷新页面查看');
-      }
-      setStatus(`运行中: ${run.status} (已等 ${mins} 分钟)...`, 'text-primary');
-      setTimeout(() => pollRun(token, startedAt), 15000);
-      return;
-    }
-    if(run.conclusion === 'success'){
-      setStatus('更新完成, 刷新数据...', 'text-success');
-      await loadData();
-      setStatus('数据已更新 ✓', 'text-success');
-    }else{
-      setStatus('运行失败: ' + run.conclusion + ' (详情见 GitHub Actions 页)', 'text-danger');
-    }
-  }catch(e){
-    setStatus(e.message, 'text-danger');
+// 页面加载时: 若 5 分钟内刚触发过(可能刷新过页面), 先锁定按钮等状态文件同步
+(function initRunningLock(){
+  const t = Number(localStorage.getItem('update_triggered_at') || 0);
+  if(t && Date.now() - t < 5 * 60 * 1000){
+    setBtnRunning(true);
+    sawRunning = true;
+    setStatus('已触发更新, 等待服务器状态同步...', 'text-primary');
+  }else if(t){
+    localStorage.removeItem('update_triggered_at');
   }
-  btn.disabled = false;
-}
+})();
+
+// 启动状态轮询: 每 20 秒一次, 所有访问者看到一致状态
+checkUpdateStatus();
+setInterval(checkUpdateStatus, 20000);
 </script>
 </body>
 </html>
