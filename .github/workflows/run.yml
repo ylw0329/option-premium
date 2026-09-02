@@ -17,6 +17,15 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 标记更新开始
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 -c "import json,datetime; json.dump({'status':'running','started_at':datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),'run_id':'${{ github.run_id }}'}, open('docs/update_status.json','w'), ensure_ascii=False)"
+          git add docs/update_status.json
+          git commit -m "状态: 更新中"
+          git push || echo "状态推送失败(不影响计算)"
+
       - name: 安装 Python
         uses: actions/setup-python@v5
         with:
@@ -41,4 +50,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/results.json option_premium_result_*.csv || true
           git commit -m "更新期权权利金计算结果 $(date -u +%Y-%m-%d)" || echo "无变更"
+          git pull --rebase || true
           git push
+
+      - name: 标记更新结束
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python -c "import json,datetime; json.dump({'status':'idle','finished_at':datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),'conclusion':'${{ job.status }}'}, open('docs/update_status.json','w'), ensure_ascii=False)"
+          git add docs/update_status.json
+          git commit -m "状态: 更新结束" || echo "无变更"
+          git pull --rebase || true
+          git push || echo "状态推送失败(不影响结果)"
