@@ -306,7 +306,11 @@ document.getElementById('exportXlsx').addEventListener('click', () => {
   XLSX.writeFile(wb, '期权日金_' + (RUN_DATE || ('run' + Date.now())) + '.xlsx');
 });
 
-// ===== 更新数据: 触发 GitHub Actions; 运行状态由仓库内 update_status.json 同步给所有访问者 =====
+// ===== 更新数据: 两种触发模式 =====
+// 模式一(推荐): Cloudflare Worker 中转, 访问者只需共享口令, 无需 GitHub 账号
+//   部署 Worker 后把地址填入下面常量; 为空则自动回退到模式二
+const PROXY_URL = '';   // 例: https://option-update.yourname.workers.dev
+// 模式二(回退): 访问者用自己的 GitHub Token 直接触发
 const REPO = 'ylw0329/option-premium';
 const WF_FILE = 'run.yml';
 const API = 'https://api.github.com/repos/' + REPO;
@@ -406,50 +410,78 @@ function applyIdle(conclusion){
   }
 }
 
-btn.addEventListener('click', async () => {
-  if(isRunning) return;                        // 更新中: 按钮已禁用, 双保险
+// 模式一: 通过 Worker 用共享口令触发(无需 GitHub 账号)
+async function triggerViaProxy(){
+  let key = localStorage.getItem('proxy_key') || '';
+  if(!key){
+    key = prompt('请输入更新口令(向数据管理员索取):');
+    if(key === null) throw new Error('已取消');
+    key = key.trim();
+  }
+  if(!key) throw new Error('口令不能为空');
+  const resp = await fetch(PROXY_URL, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({key})
+  });
+  let j = {};
+  try{ j = await resp.json(); }catch(e){}
+  if(resp.status === 403){
+    localStorage.removeItem('proxy_key');
+    throw new Error(j.error || '口令错误, 请重新输入');
+  }
+  if(resp.status === 429) throw new Error(j.error || '操作太频繁, 请几分钟后再试');
+  if(!resp.ok || !j.ok) throw new Error(j.error || ('触发失败 HTTP ' + resp.status));
+  localStorage.setItem('proxy_key', key);
+}
+
+// 模式二: 用自己的 GitHub Token 直接触发
+async function triggerViaToken(){
   let token = getToken();
   if(!token){
     token = askToken();
-    if(!token) return;
+    if(!token) throw new Error('已取消');
   }
-  setBtnRunning(true);
   setStatus('验证 Token 权限...', 'text-muted');
-  // 先分层诊断, 直接告诉用户具体卡在哪一层
   const diag = await diagnoseToken(token);
   if(diag !== 'ok'){
     if(diag.clear) localStorage.removeItem('gh_pat');
     alert(diag.title + '\n\n' + diag.detail);
-    setStatus(diag.title, 'text-danger');
-    setBtnRunning(false);
-    return;
+    throw new Error(diag.title);
   }
-  // 诊断通过才保存 token
   localStorage.setItem('gh_pat', token);
   setStatus('触发运行中...', 'text-muted');
+  const resp = await fetch(`${API}/actions/workflows/${WF_FILE}/dispatches`, {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'},
+    body: JSON.stringify({ref: 'main'})
+  });
+  if(resp.status === 401){
+    localStorage.removeItem('gh_pat');
+    throw new Error('Token 无效, 已清除, 请重新点击按钮粘贴新 Token');
+  }
+  if(resp.status === 403){
+    const hint = token.startsWith('ghp_')
+      ? 'classic token 必须勾选完整的 repo 作用域(仅 public_repo 不够), 请重新生成。'
+      : '常见原因:\n' +
+        '1) fine-grained token 的 Actions 选成了 Read-only, 需改为 Read and write;\n' +
+        '2) GitHub 账号对仓库只有读权限: 需仓库所有者在 Settings → Collaborators 把你设为 Write 协作者;\n' +
+        '3) token 是刚创建的, 可等 1-2 分钟后重试。';
+    alert('Token 无触发权限 (HTTP 403)\n\n' + hint);
+    throw new Error('Token 无 Actions 写权限, 请按弹窗提示检查');
+  }
+  if(resp.status !== 204) throw new Error('触发失败: HTTP ' + resp.status);
+}
+
+btn.addEventListener('click', async () => {
+  if(isRunning) return;                        // 更新中: 按钮已禁用, 双保险
+  setBtnRunning(true);
   try{
-    const resp = await fetch(`${API}/actions/workflows/${WF_FILE}/dispatches`, {
-      method: 'POST',
-      headers: {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'},
-      body: JSON.stringify({ref: 'main'})
-    });
-    if(resp.status === 401){
-      localStorage.removeItem('gh_pat');
-      throw new Error('Token 无效, 已清除, 请重新点击按钮粘贴新 Token');
-    }
-    if(resp.status === 403){
-      // 仓库可见、Actions 可读但触发仍被拒: 区分 Read-only / classic 缺 scope / 非写协作者
-      const hint = token.startsWith('ghp_')
-        ? 'classic token 必须勾选完整的 repo 作用域(仅 public_repo 不够), 请重新生成。'
-        : '常见原因:\n' +
-          '1) fine-grained token 的 Actions 选成了 Read-only, 需改为 Read and write;\n' +
-          '2) GitHub 账号对仓库只有读权限: 需仓库所有者在 Settings → Collaborators 把你设为 Write 协作者;\n' +
-          '3) token 是刚创建的, 可等 1-2 分钟后重试。';
-      alert('Token 无触发权限 (HTTP 403)\n\n' + hint);
-      throw new Error('Token 无 Actions 写权限, 请按弹窗提示检查');
-    }
-    if(resp.status !== 204){
-      throw new Error('触发失败: HTTP ' + resp.status);
+    if(PROXY_URL){
+      setStatus('触发运行中...', 'text-muted');
+      await triggerViaProxy();
+    }else{
+      await triggerViaToken();
     }
     // 本地乐观锁定: 记录触发时间, 刷新页面后短时间内仍保持按钮禁用(等状态文件变为 running)
     localStorage.setItem('update_triggered_at', String(Date.now()));
