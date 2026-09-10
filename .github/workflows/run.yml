@@ -1,8 +1,17 @@
 name: 期权权利金计算
 
-# 手动触发(workflow_dispatch): 在 GitHub 仓库 Actions 页面点 "Run workflow"
+# 手动触发(网页按钮/Worker 代理) + 定时触发
+# cron 为 UTC 时间, 北京时间 = UTC+8; 35 7 * * 1-5 = 每周一至周五北京时间 15:35 收盘后自动运行
+# (GitHub 定时任务高峰期可能延迟几分钟; 如需调整时间改这一行即可)
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '35 7 * * 1-5'
+
+# 同一时刻只允许一个计算任务(手动/定时撞车时排队, 不会并发跑两个)
+concurrency:
+  group: option-calc
+  cancel-in-progress: false
 
 # 让 workflow 有权限提交结果到仓库(用于 GitHub Pages 展示)
 permissions:
