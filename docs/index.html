@@ -320,15 +320,46 @@ function getToken(){ return localStorage.getItem('gh_pat') || ''; }
 
 function askToken(){
   const t = prompt(
-    '首次使用需要 GitHub Token 用于触发更新(仅存于你自己的浏览器)。\n\n' +
-    '创建方法: GitHub → Settings → Developer settings →\n' +
-    'Fine-grained tokens → Generate new token →\n' +
-    '仅选择仓库 option-premium, 权限勾选 Actions: Read and write。');
-  if(t && t.trim()){
-    localStorage.setItem('gh_pat', t.trim());
-    return t.trim();
-  }
-  return '';
+    '请粘贴 GitHub Token(仅存于本机浏览器, 不会上传服务器):\n\n' +
+    '【推荐: fine-grained token】\n' +
+    '1. 打开 github.com/settings/personal-access-tokens/new\n' +
+    '2. Repository access → Only select repositories → 勾选 option-premium\n' +
+    '   (下拉里看不到该仓库 = 你的账号还不是仓库成员, 需所有者先邀请你为协作者)\n' +
+    '3. Repository permissions → Actions 选 Read and write(注意不是 Read-only)\n\n' +
+    '【classic token】必须勾选完整 repo 作用域(仅勾 public_repo 会报 403)');
+  return (t && t.trim()) ? t.trim() : '';
+}
+
+// Token 分层诊断: 401 无效 / 404 仓库不可见(非协作者) / Actions 权限缺失
+// 返回 'ok' | 'warn'(基础检查通过, 触发仍可能被拒) | {title, detail}
+async function diagnoseToken(token){
+  const H = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'};
+  let r;
+  try{ r = await fetch(API, {headers: H}); }
+  catch(e){ return {title:'网络错误, 无法连接 GitHub API', detail:String(e)}; }
+  if(r.status === 401) return {
+    clear: true,
+    title:'Token 无效或已过期',
+    detail:'fine-grained token 有有效期(Expiration), 过期后需重新创建。请重新生成并粘贴新 Token。'
+  };
+  if(r.status === 404) return {
+    title:'Token 访问不到仓库 option-premium',
+    detail:'两种可能:\n' +
+      '1) 创建 fine-grained token 时, Repository access 要选 "Only select repositories" 并勾选 option-premium;\n' +
+      '2) 如果下拉列表里根本看不到这个仓库, 说明当前登录的 GitHub 账号不是仓库成员。\n' +
+      '   需仓库所有者在 GitHub 仓库 Settings → Collaborators 中把该账号加为协作者(权限 Write), 再重新创建 token。'
+  };
+  if(!r.ok) return {title:'检查 Token 时出错 (HTTP ' + r.status + ')', detail:'请稍后重试。'};
+  // 仓库可见 -> 检查 Actions 权限是否完全缺失(No access 时此接口 403/404)
+  let ra;
+  try{ ra = await fetch(API + '/actions/workflows', {headers: H}); }
+  catch(e){ return {title:'网络错误, 无法检查 Actions 权限', detail:String(e)}; }
+  if(ra.status === 403 || ra.status === 404) return {
+    title:'Token 缺少 Actions 权限',
+    detail:'创建 fine-grained token 时, Repository permissions → Actions 当前为 No access。\n' +
+      '请重新编辑/创建 token, 把 Actions 设为 Read and write。'
+  };
+  return 'ok';
 }
 
 function setStatus(msg, cls){
@@ -383,6 +414,18 @@ btn.addEventListener('click', async () => {
     if(!token) return;
   }
   setBtnRunning(true);
+  setStatus('验证 Token 权限...', 'text-muted');
+  // 先分层诊断, 直接告诉用户具体卡在哪一层
+  const diag = await diagnoseToken(token);
+  if(diag !== 'ok'){
+    if(diag.clear) localStorage.removeItem('gh_pat');
+    alert(diag.title + '\n\n' + diag.detail);
+    setStatus(diag.title, 'text-danger');
+    setBtnRunning(false);
+    return;
+  }
+  // 诊断通过才保存 token
+  localStorage.setItem('gh_pat', token);
   setStatus('触发运行中...', 'text-muted');
   try{
     const resp = await fetch(`${API}/actions/workflows/${WF_FILE}/dispatches`, {
@@ -395,7 +438,15 @@ btn.addEventListener('click', async () => {
       throw new Error('Token 无效, 已清除, 请重新点击按钮粘贴新 Token');
     }
     if(resp.status === 403){
-      throw new Error('Token 无 Actions 写权限, 请检查 Token 权限设置');
+      // 仓库可见、Actions 可读但触发仍被拒: 区分 Read-only / classic 缺 scope / 非写协作者
+      const hint = token.startsWith('ghp_')
+        ? 'classic token 必须勾选完整的 repo 作用域(仅 public_repo 不够), 请重新生成。'
+        : '常见原因:\n' +
+          '1) fine-grained token 的 Actions 选成了 Read-only, 需改为 Read and write;\n' +
+          '2) GitHub 账号对仓库只有读权限: 需仓库所有者在 Settings → Collaborators 把你设为 Write 协作者;\n' +
+          '3) token 是刚创建的, 可等 1-2 分钟后重试。';
+      alert('Token 无触发权限 (HTTP 403)\n\n' + hint);
+      throw new Error('Token 无 Actions 写权限, 请按弹窗提示检查');
     }
     if(resp.status !== 204){
       throw new Error('触发失败: HTTP ' + resp.status);
