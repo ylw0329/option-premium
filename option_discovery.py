@@ -11,6 +11,8 @@
   按 (exercise_year, exercise_month) 分组取最近未到期月份。
 """
 import datetime
+import re
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -18,6 +20,9 @@ from data_fetcher import safe_query_symbol_info
 
 # 商品期货期权所在的交易所(不含 CFFEX: CFFEX 仅 IO/MO/HO, 单独处理)
 COMMODITY_EXCHANGES = ["SHFE", "DCE", "CZCE", "INE", "GFEX"]
+
+# 北京时间: 服务器(GitHub Actions)为 UTC, 收盘判断必须统一用北京时间
+_BEIJING = ZoneInfo("Asia/Shanghai")
 
 # 期权的 last_exercise_datetime 为秒级 timestamp, 用于排序比较
 _COL_UNDERLYING = "underlying_symbol"
@@ -31,17 +36,46 @@ _COL_PRODUCT = "product_id"
 
 
 def is_market_closed(close_hour: int = 15, close_minute: int = 0) -> bool:
-    """判断当前(系统时间)是否已过收盘时间。
+    """判断当前(北京时间)是否已过收盘时间。
 
     到期日当天(expire_rest_days==0)的合约:
     - 未过收盘时间: 仍可交易, 计算当月合约
     - 已过收盘时间: 合约即将摘牌, 跳到下一个月合约
 
-    商品/股指期权日盘统一 15:00 收盘, 通过 config 的 expire_close_hour/minute 可调。
+    注意: 必须用北京时间。GitHub Actions 运行在 UTC, 直接 datetime.now() 会差 8 小时,
+    导致北京 15:35 的定时任务误判为"未收盘"而保留已摘牌的当月合约。
     """
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(tz=_BEIJING).replace(tzinfo=None)
     cutoff = now.replace(hour=close_hour, minute=close_minute, second=0, microsecond=0)
     return now >= cutoff
+
+
+def contract_month_label(symbol: str, exercise_year=None, exercise_month=None):
+    """返回与期权合约代码一致的月份标签 "YYMM"。
+
+    商品期权合约代码月份 = 标的期货交割月(如 INE.sc2611 期权 -> "2611"),
+    与 TqSdk 的 exercise_month(期权实际行权月, 早一个月)不同, 表格月份按合约代码显示。
+    CZCE 为 3 位年份码(如 SR611 = 2026-11); 股指期权无期货标的, 用 exercise 年月。
+    """
+    if symbol:
+        body = str(symbol).split(".")[-1]
+        m = re.search(r"[A-Za-z]+(\d{3,4})", body)
+        if m:
+            digits = m.group(1)
+            if len(digits) == 4:
+                return digits[:2] + digits[2:]
+            # CZCE 3 位: 第 1 位为年份个位
+            yd, mm = int(digits[0]), int(digits[1:3])
+            cur = datetime.datetime.now(tz=_BEIJING).year
+            year = (cur // 10) * 10 + yd
+            if year - cur > 5:
+                year -= 10
+            elif cur - year > 5:
+                year += 10
+            return f"{year % 100:02d}{mm:02d}"
+    if exercise_year and exercise_month:
+        return f"{int(exercise_year) % 100:02d}{int(exercise_month):02d}"
+    return None
 
 
 def _to_int_or_none(value):
@@ -117,6 +151,7 @@ def discover_commodity_options(api, close_hour: int = 15, close_minute: int = 0)
             "underlying": nearest_under,
             "exercise_year": _to_int_or_none(row.get(_COL_EXERCISE_YEAR)),
             "exercise_month": _to_int_or_none(row.get(_COL_EXERCISE_MONTH)),
+            "contract_month": contract_month_label(nearest_under),
             "exchange_id": grp["_exch"].iloc[0] or "",
         }
     return result
@@ -163,6 +198,7 @@ def discover_via_config(api, product_list, close_hour: int = 15, close_minute: i
                     "underlying": best[1],
                     "exercise_year": best[2],
                     "exercise_month": best[3],
+                    "contract_month": contract_month_label(best[1]),
                     "exchange_id": best[4],
                 }
         except Exception as e:
