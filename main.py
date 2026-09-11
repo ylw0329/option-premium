@@ -59,13 +59,16 @@ def build_products(api, config: dict) -> dict:
             print(f"股指期权 {prod.upper()} 未找到未到期月份, 跳过")
             continue
         ey, em = ym
+        # 股指期权(IO/MO/HO)合约代码月份即为行权月, 与 exercise 年月一致
+        contract_month = f"{ey % 100:02d}{em:02d}"
         products[pid] = {
             "underlying": index_symbol,
             "exercise_year": ey,
             "exercise_month": em,
+            "contract_month": contract_month,
             "exchange_id": "CFFEX",
         }
-        print(f"股指期权 {prod.upper()} -> 最近月份 {ey % 100:02d}{em:02d}")
+        print(f"股指期权 {prod.upper()} -> 最近月份 {contract_month}")
 
     # 按 config 顺序排序: commodity_options + index_options 顺序合并, 不在的按字母序排后
     seq = list(config.get("commodity_options", [])) + list(config.get("index_options", {}).keys())
