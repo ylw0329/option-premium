@@ -169,14 +169,19 @@ def calc_product(api, columns, call_levels: int, put_levels: int,
                  product_names: dict = None,
                  expire_add_days: int = 1, expire_near_threshold: int = 0, expire_near_add: int = 0,
                  risk_free_rate: float = 0.025,
-                 exercise_year=None, exercise_month=None) -> dict:
+                 exercise_year=None, exercise_month=None, contract_month=None) -> dict:
     """计算单品种的虚值前 N 档权利金指标。单品种异常不向上抛出。
 
     到期天数规则:
     - 默认: days = expire_rest_days + expire_add_days
     - 当 expire_rest_days <= expire_near_threshold 时: days = expire_rest_days + expire_near_add (替换, 非叠加)
+
+    最近到期月份: 优先用 contract_month(与合约代码一致的月份, 商品=标的期货交割月);
+    缺省时回退 exercise_year/exercise_month(期权实际行权月)。
     """
     row = _empty_row(columns, exchange_id, product_id, product_names, exercise_year, exercise_month)
+    if contract_month:
+        row["最近到期月份"] = contract_month
     try:
         # 1. 标的价格
         uq = get_quote_ready(api, underlying_symbol, max_seconds=60)
@@ -225,7 +230,8 @@ def calc_product(api, columns, call_levels: int, put_levels: int,
                 expire_dt = float(dt_series.iloc[0])
         if opt_exchange:
             row["交易所"] = opt_exchange
-        if ey and em:
+        # 仅在没有合约月份时, 才用期权 exercise 年月回退显示
+        if ey and em and not contract_month:
             row["最近到期月份"] = f"{ey % 100:02d}{em:02d}"
 
         # 4. 期权最新价(批量订阅, get_quote_list 返回时已初始化完成, 无需再 wait)
@@ -353,7 +359,8 @@ def calculate_all(api, products: dict, columns: list, call_levels: int, put_leve
                            expire_add_days, expire_near_threshold, expire_near_add,
                            risk_free_rate,
                            info.get("exercise_year"),
-                           info.get("exercise_month"))
+                           info.get("exercise_month"),
+                           info.get("contract_month"))
         rows.append(row)
         print(f"  -> 状态: {row['状态']}")
     return rows
