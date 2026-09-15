@@ -89,23 +89,25 @@ def output_results(rows: list, run_date: str, columns: list):
         print("\n========== 期权虚值前两档权利金指标 ==========")
         print(df.to_string(index=False))
         print("=" * 46)
+    # 历史 CSV 统一存到 docs/history/ 供下载归档
+    history_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "history")
+    os.makedirs(history_dir, exist_ok=True)
+    out_path = os.path.join(history_dir, f"option_premium_result_{run_date}.csv")
     # Excel(需要 openpyxl); 缺失则回退 CSV
-    out_path = f"option_premium_result_{run_date}.xlsx"
+    xlsx_path = os.path.join(history_dir, f"option_premium_result_{run_date}.xlsx")
     try:
-        df.to_excel(out_path, index=False)
-        print(f"已保存: {out_path}")
+        df.to_excel(xlsx_path, index=False)
+        print(f"已保存: {xlsx_path}")
     except ModuleNotFoundError as e:
         if "openpyxl" in str(e).lower():
-            csv_path = f"option_premium_result_{run_date}.csv"
-            df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-            print(f"openpyxl 未安装, 已保存 CSV(可用 Excel 打开): {csv_path}")
+            df.to_csv(out_path, index=False, encoding="utf-8-sig")
+            print(f"openpyxl 未安装, 已保存 CSV(可用 Excel 打开): {out_path}")
             print("如需 xlsx: pip install openpyxl")
         else:
             raise
     except Exception as e:
-        csv_path = f"option_premium_result_{run_date}.csv"
-        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-        print(f"保存 Excel 失败({e}), 已回退 CSV: {csv_path}")
+        df.to_csv(out_path, index=False, encoding="utf-8-sig")
+        print(f"保存 Excel 失败({e}), 已回退 CSV: {out_path}")
 
 
 def main():
