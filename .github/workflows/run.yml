@@ -8,10 +8,10 @@ on:
   schedule:
     - cron: '1 7 * * 1-5'
 
-# 同一时刻只允许一个计算任务(手动/定时撞车时排队, 不会并发跑两个)
+# 同一时刻只允许一个计算任务; 手动/定时撞车时取消排队中的任务, 避免长时间延迟
 concurrency:
   group: option-calc
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 # 让 workflow 有权限提交结果到仓库(用于 GitHub Pages 展示)
 permissions:
