@@ -57,7 +57,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/results.json docs/history.json docs/history/option_premium_result_*.csv option_premium_result_*.csv || true
+          git add docs/results.json docs/history.json docs/history/option_premium_result_*.csv || true
           git commit -m "更新期权权利金计算结果 $(date -u +%Y-%m-%d)" || echo "无变更"
           git pull --rebase || true
           git push
