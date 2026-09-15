@@ -43,8 +43,27 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
       <option value="none">原始顺序</option>
     </select>
     <input type="file" id="tplFile" accept=".txt,text/plain" style="display:none">
+    <span class="border-start mx-1"></span>
+    <label class="small text-muted mb-0">趋势:</label>
+    <select id="trendCode" class="form-select form-select-sm" style="width:auto">
+      <option value="">选品种看趋势</option>
+    </select>
+    <label class="small text-muted mb-0 ms-2">下载:</label>
+    <select id="historyDate" class="form-select form-select-sm" style="width:auto">
+      <option value="">选日期</option>
+    </select>
+    <button id="downloadCsv" class="btn btn-outline-secondary btn-sm">下载当日CSV</button>
     <span id="updateStatus" class="small text-muted"></span>
     <span id="tplStatus" class="small text-muted ms-2"></span>
+  </div>
+
+  <div id="trendBox" class="mb-3" style="display:none">
+    <div class="card">
+      <div class="card-body py-2">
+        <h6 class="card-title mb-2" id="trendTitle"></h6>
+        <canvas id="trendCanvas" width="1000" height="300" style="width:100%;max-height:300px"></canvas>
+      </div>
+    </div>
   </div>
 
   <div class="table-wrap">
@@ -146,10 +165,6 @@ function loadData(){
       render();
     });
 }
-
-loadData().catch(e => {
-  document.getElementById('genAt').textContent = '加载失败: ' + e.message;
-});
 
 document.getElementById('search').addEventListener('input', renderBody);
 
@@ -508,6 +523,149 @@ btn.addEventListener('click', async () => {
 // 启动状态轮询: 每 20 秒一次, 所有访问者看到一致状态
 checkUpdateStatus();
 setInterval(checkUpdateStatus, 20000);
+
+// ===== 历史数据: 趋势图 + 每日 CSV 下载 =====
+let HISTORY = {};   // { '2026-09-15': [品种行], ... }
+
+function loadHistory(){
+  return fetch('history.json?cb=' + Date.now())
+    .then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(j => { HISTORY = (j && typeof j === 'object') ? j : {}; });
+}
+
+// 填充趋势图品种下拉: 取最新一天的品种列表
+function populateTrendCodes(){
+  const sel = document.getElementById('trendCode');
+  const dates = Object.keys(HISTORY).sort().reverse();
+  if(!dates.length){ return; }
+  const latest = HISTORY[dates[0]] || [];
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">选品种看趋势</option>';
+  latest.forEach(r => {
+    const code = rowCode(r);
+    if(!code) return;
+    const name = String(r['品种']||code);
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if(cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+
+// 填充历史下载日期下拉
+function populateHistoryDates(){
+  const sel = document.getElementById('historyDate');
+  const dates = Object.keys(HISTORY).sort().reverse();
+  sel.innerHTML = '<option value="">选日期</option>';
+  dates.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d;
+    opt.textContent = d;
+    sel.appendChild(opt);
+  });
+}
+
+// 画趋势图: 某品种的"最终结果"随日期变化
+function drawTrend(code){
+  const box = document.getElementById('trendBox');
+  if(!code){ box.style.display = 'none'; return; }
+  const dates = Object.keys(HISTORY).sort();   // 升序
+  const pts = [];
+  dates.forEach(d => {
+    const row = (HISTORY[d]||[]).find(r => rowCode(r) === code);
+    if(row){
+      const v = Number(row['最终结果']);
+      if(!isNaN(v)) pts.push({date: d, value: v});
+    }
+  });
+  if(pts.length < 2){
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = 'block';
+  // 标题
+  const latest = HISTORY[dates[dates.length-1]] || [];
+  const r = latest.find(x => rowCode(x) === code);
+  const name = r ? String(r['品种']) : code;
+  document.getElementById('trendTitle').textContent =
+    name + ' · 最终结果趋势 (' + pts[0].date + ' ~ ' + pts[pts.length-1].date + ', ' + pts.length + ' 个交易日)';
+
+  const canvas = document.getElementById('trendCanvas');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight || 300;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const padL = 50, padR = 20, padT = 15, padB = 30;
+  const gw = W - padL - padR, gh = H - padT - padB;
+  const vals = pts.map(p => p.value);
+  const vmin = Math.min(...vals), vmax = Math.max(...vals);
+  const vrange = vmax - vmin || 1;
+  const ymin = vmin - vrange * 0.1, ymax = vmax + vrange * 0.1;
+
+  // 网格 + Y 轴刻度
+  ctx.strokeStyle = '#e9ecef'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#6c757d'; ctx.font = '11px sans-serif';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  const yticks = 5;
+  for(let i = 0; i <= yticks; i++){
+    const y = padT + gh * i / yticks;
+    const v = ymax - (ymax - ymin) * i / yticks;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + gw, y); ctx.stroke();
+    ctx.fillText(v.toFixed(2), padL - 6, y);
+  }
+  // X 轴日期标签(稀疏显示, 最多 8 个)
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const labelStep = Math.max(1, Math.ceil(pts.length / 8));
+  pts.forEach((p, i) => {
+    if(i % labelStep !== 0 && i !== pts.length - 1) return;
+    const x = padL + gw * i / (pts.length - 1);
+    ctx.fillText(p.date.slice(5), x, padT + gh + 6);
+  });
+
+  // 折线
+  ctx.strokeStyle = '#0d6efd'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  pts.forEach((p, i) => {
+    const x = padL + gw * i / (pts.length - 1);
+    const y = padT + gh * (ymax - p.value) / (ymax - ymin);
+    if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  // 数据点
+  ctx.fillStyle = '#0d6efd';
+  pts.forEach((p, i) => {
+    const x = padL + gw * i / (pts.length - 1);
+    const y = padT + gh * (ymax - p.value) / (ymax - ymin);
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+  });
+}
+
+document.getElementById('trendCode').addEventListener('change', e => drawTrend(e.target.value));
+
+// 下载当日 CSV
+document.getElementById('downloadCsv').addEventListener('click', () => {
+  const d = document.getElementById('historyDate').value;
+  if(!d){ alert('请先选择日期'); return; }
+  const ymd = d.replace(/-/g, '');
+  const a = document.createElement('a');
+  a.href = 'history/option_premium_result_' + ymd + '.csv';
+  a.download = 'option_premium_result_' + ymd + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+});
+
+// 数据加载完成后填充历史控件
+loadData().then(() => {
+  return loadHistory().catch(() => {});
+}).then(() => {
+  populateTrendCodes();
+  populateHistoryDates();
+}).catch(e => {
+  document.getElementById('genAt').textContent = '加载失败: ' + e.message;
+});
 </script>
 </body>
 </html>
