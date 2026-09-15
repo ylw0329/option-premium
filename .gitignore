@@ -19,9 +19,7 @@ option_data.json
 parse_option_data.py
 t_quote.html
 
-# 结果文件(由 Actions 重新生成, 本地不需要推)
-option_premium_result_*.csv
-
+# 结果文件(历史数据存 docs/history/, 由 Actions 生成并提交)
 # IDE / 临时
 .trae-cn/
 .vscode/
