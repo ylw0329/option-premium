@@ -414,10 +414,14 @@ async function checkUpdateStatus(){
 function applyIdle(conclusion, finishedAt){
   const wasRunning = isRunning || sawRunning;
   // 触发后到 CI 写入 running 状态前有 1 分钟左右空窗, 期间轮询可能读到上一轮
-  // 残留的 idle/cancelled; 用时间戳比对识别并忽略, 避免误报"更新失败"
+  // 残留的 idle(无论 success/cancelled/failure); 用 finished_at 时间戳识别并忽略,
+  // 保持等待状态(不重置 sawRunning/runningStart), 直到本次运行的状态写入。
   if(wasRunning && finishedAt){
     const expectStart = runningStart || Number(localStorage.getItem('update_triggered_at') || 0);
-    if(expectStart && new Date(finishedAt).getTime() < expectStart - 60000) return;
+    if(expectStart && new Date(finishedAt).getTime() < expectStart - 60000){
+      setStatus('已触发, 等待 GitHub 服务器开始运行(约 1-2 分钟后状态同步)...', 'text-primary');
+      return;
+    }
   }
   sawRunning = false;
   runningStart = 0;
