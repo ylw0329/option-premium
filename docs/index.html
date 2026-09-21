@@ -323,8 +323,8 @@ document.getElementById('exportXlsx').addEventListener('click', () => {
 
 // ===== 更新数据: 两种触发模式 =====
 // 模式一(推荐): Cloudflare Worker 中转, 访问者只需共享口令, 无需 GitHub 账号
-//   部署 Worker 后把地址填入下面常量; 为空则自动回退到模式二
-const PROXY_URL = '';   // 例: https://option-update.yourname.workers.dev
+//   Worker 保管 GitHub Token; 口令向管理员索取
+const PROXY_URL = 'https://option-update.ylw88888888.workers.dev/';
 // 模式二(回退): 访问者用自己的 GitHub Token 直接触发
 const REPO = 'ylw0329/option-premium';
 const WF_FILE = 'run.yml';
