@@ -334,6 +334,7 @@ const statusEl = document.getElementById('updateStatus');
 const STALE_MS = 30 * 60 * 1000;   // running 超过 30 分钟视为僵尸(CI 异常中断), 恢复按钮
 let isRunning = false;             // 当前是否处于更新中(对所有人生效)
 let sawRunning = false;            // 本轮轮询是否见过 running(用于 running->idle 时自动刷新)
+let runningStart = 0;              // 正在等待的这次更新的开始时间(过滤上一轮残留的 idle 状态)
 
 function getToken(){ return localStorage.getItem('gh_pat') || ''; }
 
@@ -401,19 +402,28 @@ async function checkUpdateStatus(){
       const mins = (Date.now() - new Date(st.started_at).getTime()) / 60000;
       if(mins > STALE_MS / 60000){ applyIdle(); return; }   // 僵尸状态
       sawRunning = true;
+      runningStart = new Date(st.started_at).getTime();
       setBtnRunning(true);
       setStatus(`数据更新中(服务器已运行 ${Math.max(1, Math.round(mins))} 分钟), 完成后自动刷新, 请勿重复点击`, 'text-primary');
     }else{
-      applyIdle(st.conclusion);
+      applyIdle(st.conclusion, st.finished_at);
     }
   }catch(e){ /* 网络抖动保持现状, 下轮重试 */ }
 }
 
-function applyIdle(conclusion){
+function applyIdle(conclusion, finishedAt){
   const wasRunning = isRunning || sawRunning;
+  // 触发后到 CI 写入 running 状态前有 1 分钟左右空窗, 期间轮询可能读到上一轮
+  // 残留的 idle/cancelled; 用时间戳比对识别并忽略, 避免误报"更新失败"
+  if(wasRunning && finishedAt){
+    const expectStart = runningStart || Number(localStorage.getItem('update_triggered_at') || 0);
+    if(expectStart && new Date(finishedAt).getTime() < expectStart - 60000) return;
+  }
   sawRunning = false;
+  runningStart = 0;
   setBtnRunning(false);
   if(wasRunning){
+    localStorage.removeItem('update_triggered_at');
     // 刚从更新中变为空闲 → 自动拉取最新数据
     if(conclusion === 'failure' || conclusion === 'cancelled'){
       setStatus('本次更新失败, 可重试或查看 GitHub Actions 日志', 'text-danger');
@@ -499,8 +509,10 @@ btn.addEventListener('click', async () => {
       await triggerViaToken();
     }
     // 本地乐观锁定: 记录触发时间, 刷新页面后短时间内仍保持按钮禁用(等状态文件变为 running)
-    localStorage.setItem('update_triggered_at', String(Date.now()));
+    const ts = Date.now();
+    localStorage.setItem('update_triggered_at', String(ts));
     sawRunning = true;
+    runningStart = ts;
     setStatus('已触发, 等待 GitHub 服务器开始运行(约 1-2 分钟后状态同步)...', 'text-primary');
   }catch(e){
     setStatus(e.message, 'text-danger');
@@ -514,6 +526,7 @@ btn.addEventListener('click', async () => {
   if(t && Date.now() - t < 5 * 60 * 1000){
     setBtnRunning(true);
     sawRunning = true;
+    runningStart = t;
     setStatus('已触发更新, 等待服务器状态同步...', 'text-primary');
   }else if(t){
     localStorage.removeItem('update_triggered_at');
