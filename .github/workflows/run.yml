@@ -1,14 +1,11 @@
 name: 期权权利金计算
 
-# 手动触发(网页按钮/Worker 代理) + 定时触发
-# cron 为 UTC 时间, 北京时间 = UTC+8; 1 7 * * 1-5 = 每周一至周五北京时间 15:01 收盘后自动运行
-# 注意: GitHub schedule 在高峰期可能延迟数小时, 下方"过期定时任务检查"步骤会放弃 16:00(北京)后才启动的任务
+# 仅手动触发: 网页按钮(经 Cloudflare Worker 共享口令代理)或直接 workflow_dispatch
+# 已移除定时自动运行, 数据更新完全由用户/同事主动触发
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '1 7 * * 1-5'
 
-# 同一时刻只允许一个计算任务; 手动/定时撞车时取消排队中的任务, 避免长时间延迟
+# 同一时刻只允许一个计算任务, 避免重复运行产生冲突
 concurrency:
   group: option-calc
   cancel-in-progress: true
@@ -26,21 +23,7 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 过期守卫: GitHub 调度延迟时, 排队的 schedule 可能数小时后(夜间)才启动。
-      # 定时任务若在北京 16:00(UTC 08:00)之后才启动, 放弃本次运行, 避免夜间更新;
-      # 手动触发(workflow_dispatch)不受此限制。
-      - name: 过期定时任务检查
-        if: github.event_name == 'schedule'
-        run: |
-          H=$(date -u +%H); M=$(date -u +%M)
-          echo "schedule 实际启动 UTC ${H}:${M} (计划 UTC 07:01 / 北京 15:01)"
-          if [ $((10#$H)) -ge 8 ]; then
-            echo "skip=true" >> "$GITHUB_ENV"
-            echo "::warning::定时任务调度延迟超过 59 分钟(北京 16:00 后才启动), 放弃本次自动更新"
-          fi
-
       - name: 标记更新开始
-        if: env.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -50,29 +33,24 @@ jobs:
           git push || echo "状态推送失败(不影响计算)"
 
       - name: 安装 Python
-        if: env.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: 安装依赖
-        if: env.skip != 'true'
         run: |
           pip install tqsdk==3.10.1 pandas
 
       - name: 运行计算程序
-        if: env.skip != 'true'
         run: python main.py
         env:
           TQ_USER: ${{ secrets.TQ_USER }}
           TQ_PASSWORD: ${{ secrets.TQ_PASSWORD }}
 
       - name: 生成网页数据
-        if: env.skip != 'true'
         run: python generate_web_data.py
 
       - name: 提交结果到仓库
-        if: env.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -82,7 +60,7 @@ jobs:
           git push
 
       - name: 标记更新结束
-        if: always() && env.skip != 'true'
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
